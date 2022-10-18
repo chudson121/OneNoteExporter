@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Office.Interop.OneNote;
 using OneNoteExporter.AppConfig;
@@ -15,8 +17,7 @@ namespace OneNoteExporter
         private static readonly Application OnenoteApp = new Application();
 
         private static IConfigurationRoot _configuration;
-        private static string ExportPath { get; set; }
-        private static string FilteredNoteBookName { get; set; }
+
 
         public static void Main()
         {
@@ -24,40 +25,90 @@ namespace OneNoteExporter
 
             InitializeLogger();
 
-
-            ExportPath = _configuration["exportedFilePath"]; //"D:\\output";
-            FilteredNoteBookName = _configuration["NoteBookName"]; //"DevOps Team Notebook";
-            //var filteredSectionName = _configuration["SectionName"]; //"SOP";
-
-            var notebooks = OnenoteApp.GetNotebooks();
-
-            foreach (var notebook in notebooks)
+            var options = new ParallelOptions()
             {
-                if (string.Equals(notebook.Title, FilteredNoteBookName, StringComparison.CurrentCultureIgnoreCase))
+                MaxDegreeOfParallelism = 10
+            };
+
+            var ExportPath = _configuration["exportedFilePath"];
+            var FilteredNoteBookName = _configuration["NoteBookName"];
+            var FilteredSectionName = _configuration["SectionName"];
+
+            OneNoteModels.NotebookInfo[] FilteredNotebooks;
+            OneNoteModels.SectionBase[] FilteredSections;
+
+            FilteredNotebooks = GetFilteredNotebookInfos(OnenoteApp.GetNotebooks(), FilteredNoteBookName);
+
+            foreach (var notebook in FilteredNotebooks)
+            {
+                Log.Information($"NoteBook: {notebook.Title}");
+
+                FilteredSections = GetFilteredSections(OnenoteApp.GetSections(notebook.Id), FilteredSectionName);
+
+                foreach (var section in FilteredSections)
                 {
-                    Log.Information($"NoteBook: {notebook.Title}");
+                    Log.Information($"Section {section.Title}");
 
-                    var sections = OnenoteApp.GetSections(notebook.Id);
+                    var pages = OnenoteApp.GetPages(section.Id);
 
-                    foreach (var section in sections)
+                    foreach (var pageInfo in pages)
                     {
-                        //if(string.IsNullOrEmpty(filteredSectionName)) //process each section
-                        //if (!string.Equals(section.Title, filteredSectionName, StringComparison.CurrentCultureIgnoreCase)) continue;
-
-                        Log.Information($"Section {section.Title}");
-
-                        var pages = OnenoteApp.GetPages(section.Id);
-
-                        foreach (var pageInfo in pages)
-                        {
-                            var filePath = $"{ExportPath}\\{section.Title.GetSafeFilename()}\\{pageInfo.Title.GetSafeFilename()}.docx";
-                            CreateDirectory(filePath);
-                            ExtractPageToDocx(filePath, pageInfo);
-                            ConvertDocxToMarkdown(filePath);
-                        }
+                        OrchestratePageExtraction(section.Title.GetSafeFilename(), pageInfo, ExportPath);
                     }
+
+                    //Parallel.ForEach(pages, options, i =>
+                    //{
+                    //    OrchestratePageExtraction(section.Title.GetSafeFilename(), i, ExportPath);
+                    //});
+
+                }
+
+
+            }
+        }
+
+    
+        private static OneNoteModels.NotebookInfo[] GetFilteredNotebookInfos(OneNoteModels.NotebookInfo[] collecction, string filterContentName)
+        {
+            if (string.IsNullOrEmpty(filterContentName)) //process all
+            {
+                return collecction;
+            }
+
+            var returnedList = new List<OneNoteModels.NotebookInfo>();
+            
+            foreach (var item in collecction)
+            {
+                if (string.Equals(item.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase))
+                {
+                    returnedList.Add(item);
+                    break;
                 }
             }
+
+            return returnedList.ToArray();
+        }
+
+        private static OneNoteModels.SectionBase[] GetFilteredSections(OneNoteModels.SectionBase[] collection, string filterContentName)
+        {
+            if (string.IsNullOrEmpty(filterContentName)) //process all sections
+            {
+                return collection;
+            }
+
+            var returnedSections = new List<OneNoteModels.SectionBase>();
+
+            foreach (var item in collection)
+            {
+                if (string.Equals(item.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase)) //filter to specific section
+                {
+                    returnedSections.Add(item);
+                    break;
+                }
+
+            }
+            return returnedSections.ToArray();
+
         }
 
         private static void ConvertDocxToMarkdown(string docxfilePath)
@@ -70,7 +121,8 @@ namespace OneNoteExporter
                             $"-w gfm " +
                             $"-o \"{docxfilePath.Replace("docx", "md")}\" " +
                             $"--extract-media=\"{fileInfo.Name.Replace(fileInfo.Extension, "")}\"";
-           
+
+            Log.Information($"arguments {arguments}");
             
             var psi = new ProcessStartInfo
             {
@@ -86,16 +138,16 @@ namespace OneNoteExporter
             process.Start();
         }
 
-        private static void ExtractPageToDocx(string filePath, PageInfo pageInfo )
+        private static void ExtractPageToDocx(string filePath, PageInfo pageInfo)
         {
             if (pageInfo == null) throw new ArgumentNullException(nameof(pageInfo));
-            
+
             Log.Information($"Page: {pageInfo.Title}");
-            
+
             try
             {
                 //File.Delete(filePath);
-                if(!File.Exists(filePath))
+                if (!File.Exists(filePath))
                     OnenoteApp.Publish(pageInfo.Id, filePath, PublishFormat.pfWord);
             }
             catch (Exception e)
@@ -126,6 +178,14 @@ namespace OneNoteExporter
                 .AddJsonFile("appsettings.json", true, true);
 
             _configuration = builder.Build();
+        }
+
+        private static void OrchestratePageExtraction(string sectionFileName, PageInfo pageInfo, string exportPath)
+        {
+            var filePath = $"{exportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}\\{pageInfo.Title.GetSafeFilename()}.docx";
+            CreateDirectory(filePath);
+            ExtractPageToDocx(filePath, pageInfo);
+            ConvertDocxToMarkdown(filePath);
         }
     }
 }

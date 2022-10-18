@@ -21,8 +21,13 @@ namespace OneNoteExporter
 
         public static string GetSafeFilename(this string str)
         {
-
-            return string.Join("_", str.Split(Path.GetInvalidFileNameChars()));
+            var retval = string.Join("_", 
+                str.Split(
+                    Path.GetInvalidFileNameChars()
+                    )
+                ).Replace(" ", "_");
+            
+            return retval;
 
         }
 
