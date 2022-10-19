@@ -17,6 +17,7 @@ namespace OneNoteExporter
         private static readonly Application OnenoteApp = new Application();
 
         private static IConfigurationRoot _configuration;
+        private static List<string> FilesToBeDeleted = new List<string>();
 
 
         public static void Main()
@@ -33,6 +34,7 @@ namespace OneNoteExporter
             var ExportPath = _configuration["exportedFilePath"];
             var FilteredNoteBookName = _configuration["NoteBookName"];
             var FilteredSectionName = _configuration["SectionName"];
+            var ConfigPandocPath = _configuration["pandocpath"];
 
             OneNoteModels.NotebookInfo[] FilteredNotebooks;
             OneNoteModels.SectionBase[] FilteredSections;
@@ -51,23 +53,43 @@ namespace OneNoteExporter
 
                     var pages = OnenoteApp.GetPages(section.Id);
 
-                    foreach (var pageInfo in pages)
-                    {
-                        OrchestratePageExtraction(section.Title.GetSafeFilename(), pageInfo, ExportPath);
-                    }
-
-                    //Parallel.ForEach(pages, options, i =>
+                    //testing single thread proc
+                    //foreach (var pageInfo in pages)
                     //{
-                    //    OrchestratePageExtraction(section.Title.GetSafeFilename(), i, ExportPath);
-                    //});
+                    //    OrchestratePageExtraction(section.Title.GetSafeFilename(), pageInfo, ExportPath, ConfigPandocPath);
+                    //}
+
+                    // This is working 
+                    Parallel.ForEach(pages, options, i =>
+                    {
+                        OrchestratePageExtraction(section.Title.GetSafeFilename(), i, ExportPath, ConfigPandocPath);
+                    });
 
                 }
 
+            }
 
+            //TODO: make into config item if we want to retain
+            RemoveExtractedWordFiles(FilesToBeDeleted);
+
+        }
+
+        private static void RemoveExtractedWordFiles(List<string> filesToBeDeleted)
+        {
+            foreach (var file in filesToBeDeleted)
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Problem deleteing file {file} exception: {ex}");
+                }
+                
             }
         }
 
-    
         private static OneNoteModels.NotebookInfo[] GetFilteredNotebookInfos(OneNoteModels.NotebookInfo[] collecction, string filterContentName)
         {
             if (string.IsNullOrEmpty(filterContentName)) //process all
@@ -111,19 +133,18 @@ namespace OneNoteExporter
 
         }
 
-        private static void ConvertDocxToMarkdown(string docxfilePath)
+        private static void ConvertDocxToMarkdown(string docxfilePath, string pandocPath)
         {
             //SET CMD=%localappdata%\Pandoc\pandoc.exe %1 -w gfm -o "%BASEDIR%\%~n1\%~n1.md" %1 --extract-media=""
             var fileInfo = new FileInfo(docxfilePath);
-
-            var processName = "pandoc.exe";
+            var processName = string.Format("{0}pandoc.exe", pandocPath);
             var arguments = $"\"{docxfilePath}\"  " +
                             $"-w gfm " +
                             $"-o \"{docxfilePath.Replace("docx", "md")}\" " +
                             $"--extract-media=\"{fileInfo.Name.Replace(fileInfo.Extension, "")}\"";
 
             Log.Information($"arguments {arguments}");
-            
+
             var psi = new ProcessStartInfo
             {
                 FileName = processName,
@@ -134,8 +155,22 @@ namespace OneNoteExporter
                 WorkingDirectory = fileInfo.Directory.FullName
             };
 
-            var process = new Process { StartInfo = psi };
-            process.Start();
+            CallConverterExecutable(psi);
+
+        }
+
+        private static void CallConverterExecutable(ProcessStartInfo psi)
+        {
+            try
+            {
+                var process = new Process { StartInfo = psi };
+                process.Start();
+            }
+            catch (Exception ex)
+            {
+
+                throw new ApplicationException("Is Pandoc Installed?", ex);
+            }
         }
 
         private static void ExtractPageToDocx(string filePath, PageInfo pageInfo)
@@ -180,12 +215,15 @@ namespace OneNoteExporter
             _configuration = builder.Build();
         }
 
-        private static void OrchestratePageExtraction(string sectionFileName, PageInfo pageInfo, string exportPath)
+        private static void OrchestratePageExtraction(string sectionFileName, PageInfo pageInfo, string exportPath, string pandocPath)
         {
-            var filePath = $"{exportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}\\{pageInfo.Title.GetSafeFilename()}.docx";
+            var filePath = $"{exportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}.docx";
             CreateDirectory(filePath);
             ExtractPageToDocx(filePath, pageInfo);
-            ConvertDocxToMarkdown(filePath);
+            ConvertDocxToMarkdown(filePath, pandocPath);
+            FilesToBeDeleted.Add(filePath); //the convert cannot be guarenteed to complete due to interop call
+
         }
+
     }
 }
