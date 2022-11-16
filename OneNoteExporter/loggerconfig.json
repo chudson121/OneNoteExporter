@@ -1,0 +1,9 @@
+﻿{
+    "serilog:minimum-level": "Information",
+    "serilog:minimum-level:override:Microsoft": "Information",
+    "serilog:minimum-level:override:System": "Information",
+    "serilog:using:RollingFile": "Serilog.Sinks.RollingFile",
+    "serilog:write-to:RollingFile.pathFormat": "./Logs/log-{Date}.txt",
+    "serilog:write-to:RollingFile.outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level}] [{SourceContext}] {Message}{NewLine}{Exception}",
+    "serilog:write-to:RollingFile.retainedFileCountLimit": "10"
+}
