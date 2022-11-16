@@ -9,6 +9,13 @@ using Microsoft.Office.Interop.OneNote;
 using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
 using Serilog;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using System.Diagnostics.Metrics;
+using OneNoteExporter.AppConfig;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+using Honeycomb.OpenTelemetry;
+using OpenTelemetry;
 
 namespace OneNoteExporter
 {
@@ -23,13 +30,29 @@ namespace OneNoteExporter
         public int ParallelThreadCount { get; private set; }
         public string FilteredNoteBookName { get; private set; }
         public string FilteredSectionName { get; private set; }
-        
+        private readonly Counter<int> NoteBookCounter;
+        private readonly Counter<int> SectionCounter;
+        private readonly Counter<int> PagesCounter;
+        private readonly Tracer Tracer;
+        private readonly MeterProvider MeterProvider;
 
-
-        public Converter(Application app, IConfigurationRoot config)
+        public Converter(Application app, IConfigurationRoot config, Tracer tracer, HoneycombOptions honeycombOptions)
         {
             configuration = config;
             OnenoteApp = app;
+            Tracer = tracer;
+
+            using var meter = new Meter($"{ApplicationUtility.GetApplicationName()}-Metric");
+            NoteBookCounter = meter.CreateCounter<int>("Notebooks");
+            SectionCounter = meter.CreateCounter<int>("Sections");
+            PagesCounter = meter.CreateCounter<int>("Pages");
+
+            var meterProvider = Sdk.CreateMeterProviderBuilder()
+           .AddHoneycomb(honeycombOptions)
+           .AddMeter(meter.Name)
+           .AddConsoleExporter()
+           .Build();
+
 
             ExportPath = configuration["exportedFilePath"];
             FilteredNoteBookName = configuration["NoteBookName"];
@@ -42,8 +65,13 @@ namespace OneNoteExporter
         {
             OneNoteModels.NotebookInfo[] FilteredNotebooks;
 
-
             FilteredNotebooks = GetFilteredNotebookInfos(OnenoteApp.GetNotebooks(), FilteredNoteBookName);
+
+            using var span = Tracer.StartActiveSpan("FilteredNotebooks");
+            span.SetAttribute("app.manual-span.message", "notebook processing started!");
+            span.SetAttribute("user_id", 444);
+            span.End(new DateTimeOffset());
+
             ProcessNoteBooks(FilteredNotebooks);
 
             if (removeIntermediateFiles)
@@ -59,9 +87,9 @@ namespace OneNoteExporter
             foreach (var notebook in FilteredNotebooks)
             {
                 Log.Information($"NoteBook: {notebook.Title}");
-
+                NoteBookCounter.Add(1);
                 FilteredSections = GetFilteredSections(OnenoteApp.GetSections(notebook.Id), FilteredSectionName);
-
+                
                 ProcessSection(FilteredSections);
 
             }
@@ -79,16 +107,10 @@ namespace OneNoteExporter
             foreach (var section in FilteredSections)
             {
                 Log.Information($"Section {section.Title}");
+                SectionCounter.Add(1);
 
                 var pages = OnenoteApp.GetPages(section.Id);
 
-                //testing single thread proc
-                //foreach (var pageInfo in pages)
-                //{
-                //    OrchestratePageExtraction(section.Title.GetSafeFilename(), pageInfo, ExportPath, ConfigPandocPath);
-                //}
-
-                // This is working 
                 Parallel.ForEach(pages, options, i =>
                 {
                     OrchestratePageExtraction(section.Title.GetSafeFilename(), i);
@@ -99,12 +121,15 @@ namespace OneNoteExporter
 
         private void OrchestratePageExtraction(string sectionFileName, PageInfo pageInfo)
         {
-            var filePath = $"{ExportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}.docx";
-            CreateDirectory(filePath);
-            ExtractPageToDocx(filePath, pageInfo);
-            ConvertDocxToMarkdown(filePath, PandocPath);
-            FilesToBeDeleted.Add(filePath); //the convert cannot be guarenteed to complete due to interop call
-
+            PagesCounter.Add(1);
+            if (!System.Convert.ToBoolean(configuration["debugBypassHeavyWorkload"]))
+            {
+                var filePath = $"{ExportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}.docx";
+                CreateDirectory(filePath);
+                ExtractPageToDocx(filePath, pageInfo);
+                ConvertDocxToMarkdown(filePath, PandocPath);
+                FilesToBeDeleted.Add(filePath); //the convert cannot be guarenteed to complete due to interop call
+            }
         }
 
 
