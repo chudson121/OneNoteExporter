@@ -6,6 +6,7 @@ namespace OneNoteExporter.OneNoteModels
     public class SectionBase : OneNoteNode
     {
         public string Path { get; set; }
+        
     }
 
     public class SectionGroupInfo : SectionBase

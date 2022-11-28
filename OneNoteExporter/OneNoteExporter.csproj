@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Honeycomb.OpenTelemetry" Version="1.1.0" />
+    <PackageReference Include="Honeycomb.OpenTelemetry" Version="1.2.0" />
     <PackageReference Include="Honeycomb.OpenTelemetry.AutoInstrumentations" Version="0.25.0-beta" />
     <PackageReference Include="Interop.Microsoft.Office.Interop.OneNote" Version="1.1.0.2" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0" />

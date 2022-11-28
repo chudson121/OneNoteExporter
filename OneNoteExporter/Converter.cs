@@ -1,197 +1,192 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Numerics;
 using System.Threading.Tasks;
-using Microsoft.Office.Interop.OneNote;
-using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
-using Serilog;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Options;
-using System.Diagnostics.Metrics;
-using OneNoteExporter.AppConfig;
+using Microsoft.Office.Interop.OneNote;
 using OpenTelemetry.Trace;
-using OpenTelemetry.Metrics;
-using Honeycomb.OpenTelemetry;
-using OpenTelemetry;
+using Serilog;
+using static System.Collections.Specialized.BitVector32;
+using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
 
 namespace OneNoteExporter
 {
     public class Converter
     {
-        private List<string> FilesToBeDeleted = new List<string>();
-        private IConfigurationRoot configuration;
-        private readonly Application OnenoteApp = new Application();
+        private readonly List<string> FilesToBeDeleted = new();
+        private readonly Application OnenoteApp;
 
-        public string ExportPath { get; private set; }
-        public string PandocPath { get; private set; }
-        public int ParallelThreadCount { get; private set; }
-        public string FilteredNoteBookName { get; private set; }
-        public string FilteredSectionName { get; private set; }
+        //Configuration
+        //private IConfigurationRoot configuration;
+        public string ExportPath { get; set; }
+        public string PandocPath { get; set; }
+        public int ParallelThreadCount { get; set; }
+        public string FilteredNoteBookName { get; set; }
+        public string FilteredSectionName { get; set; }
+
+        public bool RemoveIntermediateConvertedFiles { get; set; } = true;
+
+        public bool BypassConvertion { get; set; } = false;
+
+        public long FilesProcessedCount { get; private set; }
+
+        //Telemetry
+        private readonly Tracer Tracer;
         private readonly Counter<int> NoteBookCounter;
         private readonly Counter<int> SectionCounter;
         private readonly Counter<int> PagesCounter;
-        private readonly Tracer Tracer;
-        private readonly MeterProvider MeterProvider;
 
-        public Converter(Application app, IConfigurationRoot config, Tracer tracer, HoneycombOptions honeycombOptions)
+
+        public Converter(Application app, Tracer tracer, Meter meter)
         {
-            configuration = config;
+            
             OnenoteApp = app;
             Tracer = tracer;
 
-            using var meter = new Meter($"{ApplicationUtility.GetApplicationName()}-Metric");
             NoteBookCounter = meter.CreateCounter<int>("Notebooks");
             SectionCounter = meter.CreateCounter<int>("Sections");
             PagesCounter = meter.CreateCounter<int>("Pages");
-
-            var meterProvider = Sdk.CreateMeterProviderBuilder()
-           .AddHoneycomb(honeycombOptions)
-           .AddMeter(meter.Name)
-           .AddConsoleExporter()
-           .Build();
-
-
-            ExportPath = configuration["exportedFilePath"];
-            FilteredNoteBookName = configuration["NoteBookName"];
-            FilteredSectionName = configuration["SectionName"];
-            PandocPath = configuration["pandocpath"];
-            ParallelThreadCount = System.Convert.ToInt32(configuration["appParallelismCount"]);
+                      
         }
 
-        public void Convert(bool removeIntermediateFiles)
+        //this is doing lots of stuff, is it all its own concern
+        public long ConvertPages()
         {
-            OneNoteModels.NotebookInfo[] FilteredNotebooks;
-
-            FilteredNotebooks = GetFilteredNotebookInfos(OnenoteApp.GetNotebooks(), FilteredNoteBookName);
-
+                          
             using var span = Tracer.StartActiveSpan("FilteredNotebooks");
-            span.SetAttribute("app.manual-span.message", "notebook processing started!");
-            span.SetAttribute("user_id", 444);
-            span.End(new DateTimeOffset());
+            span.SetAttribute("app.Converter.message", "Notebook processing started!");
+            
+            //Defense gates
+            if (string.IsNullOrEmpty(ExportPath))
+                throw new ArgumentNullException(nameof(ExportPath)); 
 
-            ProcessNoteBooks(FilteredNotebooks);
+            if(string.IsNullOrEmpty(FilteredNoteBookName))
+                throw new ArgumentNullException(nameof(FilteredNoteBookName));
 
-            if (removeIntermediateFiles)
-                RemoveExtractedWordFiles();
-
-        }
-
-        private void ProcessNoteBooks(OneNoteModels.NotebookInfo[] FilteredNotebooks)
-        {
-
-            OneNoteModels.SectionBase[] FilteredSections;
-
-            foreach (var notebook in FilteredNotebooks)
-            {
-                Log.Information($"NoteBook: {notebook.Title}");
-                NoteBookCounter.Add(1);
-                FilteredSections = GetFilteredSections(OnenoteApp.GetSections(notebook.Id), FilteredSectionName);
-                
-                ProcessSection(FilteredSections);
-
-            }
+            if (string.IsNullOrEmpty(PandocPath))
+                throw new ArgumentNullException(nameof(PandocPath));
 
 
-        }
+            var FilteredNotebooks = GetNotebookInfos(OnenoteApp.GetNotebooks(), FilteredNoteBookName);
+            var FilteredSections = GetFilteredSections(FilteredNotebooks, FilteredSectionName);
+            var PagesToProcess = GetPageInfoForSections(FilteredSections);
 
-        private void ProcessSection(OneNoteModels.SectionBase[] FilteredSections)
-        {
             var options = new ParallelOptions()
             {
                 MaxDegreeOfParallelism = ParallelThreadCount
             };
 
-            foreach (var section in FilteredSections)
-            {
-                Log.Information($"Section {section.Title}");
-                SectionCounter.Add(1);
+            Parallel.ForEach(PagesToProcess, options, OrchestratePageExtraction);
 
-                var pages = OnenoteApp.GetPages(section.Id);
+            if (RemoveIntermediateConvertedFiles)
+                FileSystemHelper.RemoveFiles(FilesToBeDeleted);
 
-                Parallel.ForEach(pages, options, i =>
-                {
-                    OrchestratePageExtraction(section.Title.GetSafeFilename(), i);
-                });
 
-            }
+            span.SetStatus(Status.Ok.WithDescription("Completed page Conversions"));
+            span.End(endTimestamp: DateTimeOffset.UtcNow);
+            
+
+
+            return FilesProcessedCount;
+
+                        
         }
 
-        private void OrchestratePageExtraction(string sectionFileName, PageInfo pageInfo)
+        //TODO: this should be in the OneNoteClass
+        public List<OneNoteModels.NotebookInfo> GetNotebookInfos(OneNoteModels.NotebookInfo[] notebookCollecction, string filterContentName)
         {
-            PagesCounter.Add(1);
-            if (!System.Convert.ToBoolean(configuration["debugBypassHeavyWorkload"]))
-            {
-                var filePath = $"{ExportPath}\\{sectionFileName}\\{pageInfo.Title.GetSafeFilename()}.docx";
-                CreateDirectory(filePath);
-                ExtractPageToDocx(filePath, pageInfo);
-                ConvertDocxToMarkdown(filePath, PandocPath);
-                FilesToBeDeleted.Add(filePath); //the convert cannot be guarenteed to complete due to interop call
-            }
-        }
-
-
-
-        public void RemoveExtractedWordFiles()
-        {
-            foreach (var file in FilesToBeDeleted)
-            {
-                try
-                {
-                    File.Delete(file);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Problem deleteing file {file} exception: {ex}");
-                }
-
-            }
-        }
-
-        public OneNoteModels.NotebookInfo[] GetFilteredNotebookInfos(OneNoteModels.NotebookInfo[] collecction, string filterContentName)
-        {
-            if (string.IsNullOrEmpty(filterContentName)) //process all
-            {
-                return collecction;
-            }
-
             var returnedList = new List<OneNoteModels.NotebookInfo>();
 
-            foreach (var item in collecction)
+            if (string.IsNullOrEmpty(filterContentName)) //process all
             {
-                if (string.Equals(item.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase))
-                {
-                    returnedList.Add(item);
-                    break;
-                }
+                return returnedList;
             }
 
-            return returnedList.ToArray();
+            foreach (var nb in from nb in notebookCollecction
+                               where string.Equals(nb.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase)
+                               select nb)
+            {
+                returnedList.Add(nb);
+                break;
+            }
+
+            NoteBookCounter.Add(returnedList.Count);
+            return returnedList;
         }
 
-        public OneNoteModels.SectionBase[] GetFilteredSections(OneNoteModels.SectionBase[] collection, string filterContentName)
+        public List<OneNoteModels.SectionBase> GetFilteredSections(List<OneNoteModels.NotebookInfo> notebookCollecction, string sectionName)
         {
-            if (string.IsNullOrEmpty(filterContentName)) //process all sections
-            {
-                return collection;
-            }
-
             var returnedSections = new List<OneNoteModels.SectionBase>();
-
-            foreach (var item in collection)
+                        
+            foreach (var nb in notebookCollecction)
             {
-                if (string.Equals(item.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase)) //filter to specific section
+                
+                //empty filter add all sections from notebook
+                if (string.IsNullOrEmpty(sectionName)) //process all sections
                 {
-                    returnedSections.Add(item);
-                    break;
+                    return returnedSections = new List<OneNoteModels.SectionBase>(nb.Sections);
                 }
 
+                //Filter
+                var sectionBaseMatchingFilter = nb.Sections.FirstOrDefault(
+                        name => name.Title.ToLowerInvariant() == sectionName.ToLowerInvariant());
+
+                returnedSections.Add(sectionBaseMatchingFilter);    
+
             }
-            return returnedSections.ToArray();
+
+            return returnedSections;
 
         }
+
+        public List<PageInfo> GetPageInfoForSections(List<OneNoteModels.SectionBase> FilteredSections)
+        {
+          
+            var pageInfoList = new List<PageInfo>();
+
+            using var span = Tracer.StartActiveSpan("Getting pages");
+            
+
+            foreach (var section in FilteredSections)
+            {
+                span.SetAttribute("app.PageInfo.message", $"Getting pages for Section: {section.Title}");
+                //Log.Information($"Getting pages for Section: {section.Title}");
+                SectionCounter.Add(1);
+                pageInfoList.AddRange(OnenoteApp.GetPages(section));
+
+                FilesProcessedCount +=  pageInfoList.Count;
+
+            }
+
+            span.End(new DateTimeOffset());
+
+            return pageInfoList;
+
+
+        }
+
+        public void OrchestratePageExtraction(PageInfo pageInfo)
+        {
+            PagesCounter.Add(1);
+
+            Log.Information($"Extracting Section {pageInfo.SectionName} - Page: {pageInfo.Title}");
+
+            if (BypassConvertion)
+            {
+                return;
+            }
+
+            var filePath = $"{ExportPath}\\{pageInfo.SectionName.GetSafeFilename()}\\{pageInfo.Title.GetSafeFilename()}.docx";
+            FileSystemHelper.CreateDirectory(filePath);
+            ConvertOneNotePageToWordDoc(filePath, pageInfo);
+            ConvertDocxToMarkdown(filePath, PandocPath);
+            FilesToBeDeleted.Add(filePath); //the convert cannot be guarenteed to complete due to interop call
+        }
+
 
         private void ConvertDocxToMarkdown(string docxfilePath, string pandocPath)
         {
@@ -215,12 +210,6 @@ namespace OneNoteExporter
                 WorkingDirectory = fileInfo.Directory.FullName
             };
 
-            CallConverterExecutable(psi);
-
-        }
-
-        private void CallConverterExecutable(ProcessStartInfo psi)
-        {
             try
             {
                 var process = new Process { StartInfo = psi };
@@ -231,9 +220,10 @@ namespace OneNoteExporter
 
                 throw new ApplicationException("Is Pandoc Installed?", ex);
             }
-        }
 
-        private void ExtractPageToDocx(string filePath, PageInfo pageInfo)
+        }
+               
+        private void ConvertOneNotePageToWordDoc(string filePath, PageInfo pageInfo)
         {
             if (pageInfo == null) throw new ArgumentNullException(nameof(pageInfo));
 
@@ -253,12 +243,7 @@ namespace OneNoteExporter
             }
         }
 
-        private void CreateDirectory(string filePath)
-        {
-            var directoryInfo = new FileInfo(filePath).Directory;
-            directoryInfo?.Create();
-        }
-
-
+        //FileSystemStuff
+      
     }
 }

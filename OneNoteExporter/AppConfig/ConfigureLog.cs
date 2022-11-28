@@ -1,7 +1,6 @@
 ﻿using System;
 using Serilog;
 using Serilog.Core;
-using Serilog.Events;
 
 namespace OneNoteExporter.AppConfig
 {
@@ -15,7 +14,7 @@ namespace OneNoteExporter.AppConfig
             var version = ApplicationUtility.GetApplicationVersion().ToString();
             var deploymentEnvironment = Environment.GetEnvironmentVariable(AspnetcoreEnvironment);
 
-            
+
             var configuration = new LoggerConfiguration().ReadFrom.AppSettings()
                 .WriteTo.Console()
                 .Enrich.FromLogContext()

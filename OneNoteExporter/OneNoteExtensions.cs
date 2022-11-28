@@ -1,9 +1,10 @@
-﻿using Microsoft.Office.Interop.OneNote;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Xml.Linq;
+using Microsoft.Office.Interop.OneNote;
 using OneNoteExporter.OneNoteModels;
 using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
 
@@ -74,6 +75,7 @@ namespace OneNoteExporter
                         Title = element.Attribute("name")?.Value.ToAscii(),
                         Path = element.Attribute("path")?.Value,
                         Type = element.Name.LocalName
+                        
                     };
 
                 oneNoteApp.GetHyperlinkToObject(notebook.Id, "", out string url);
@@ -90,6 +92,7 @@ namespace OneNoteExporter
         public static SectionBase[] GetSections(this Application oneNoteApp, string notebookId)
         {
             oneNoteApp.GetHierarchy(notebookId, HierarchyScope.hsSections, out var xml);
+
             var doc = XDocument.Parse(xml);
 
             var notebook = doc.Elements().First();
@@ -123,11 +126,11 @@ namespace OneNoteExporter
                         };
                         break;
                     case "Section":
-                    {
-                        var sectionInfo = new SectionInfo();
-                        section = sectionInfo;
-                        break;
-                    }
+                        {
+                            var sectionInfo = new SectionInfo();
+                            section = sectionInfo;
+                            break;
+                        }
                 }
 
                 if (section == null) continue;
@@ -148,11 +151,11 @@ namespace OneNoteExporter
 
 
 
-        public static List<PageInfo> GetPages(this Application oneNoteApp, string sectionId)
+        public static List<PageInfo> GetPages(this Application oneNoteApp, SectionBase section)
         {
             var retval = new List<PageInfo>();
 
-            oneNoteApp.GetHierarchy(sectionId, HierarchyScope.hsPages, out var xml);
+            oneNoteApp.GetHierarchy(section.Id, HierarchyScope.hsPages, out var xml);
             var doc = XDocument.Parse(xml);
 
             if (doc.Root == null)
@@ -183,7 +186,8 @@ namespace OneNoteExporter
                         Id = pageId,
                         Title = element.Attribute("name")?.Value.ToAscii(),
                         Type = element.Name.LocalName,
-                        Url = url
+                        Url = url,
+                        SectionName = section.Title
                     };
 
 
@@ -192,7 +196,7 @@ namespace OneNoteExporter
 
             return retval;
         }
-        
+
     }
 }
 

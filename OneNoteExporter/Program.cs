@@ -1,89 +1,115 @@
 ﻿using System;
+using System.Diagnostics.Metrics;
 using System.IO;
+
 using Microsoft.Extensions.Configuration;
 using Microsoft.Office.Interop.OneNote;
-using OneNoteExporter.AppConfig;
-using Serilog;
-using System.Diagnostics;
-using OpenTelemetry.Trace;
 using Honeycomb.OpenTelemetry;
+using OneNoteExporter.AppConfig;
 using OpenTelemetry;
-using System.Diagnostics.Metrics;
 using OpenTelemetry.Metrics;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using OpenTelemetry.Trace;
+using Serilog;
 
 namespace OneNoteExporter
 {
     public class Program
     {
-
         private static IConfigurationRoot _configuration;
-
-        //private static ActivitySource applicaitonActivitySource;
-
-        private static readonly Application OnenoteApp = new Application();
-
+        private static readonly Application OnenoteApp = new();
         private static Converter _converter;
+
+        private static HoneycombOptions honeycombOptions;
+        private static TracerProvider TraceProvider;
+        private static MeterProvider MeterProvider;
+        private static Tracer ApplicationTracer;
+        private static Meter ApplicationMeter;
 
         public static void Main()
         {
-
-            //var appName = System.Reflection.Assembly.GetExecutingAssembly().GetName().Name;
-            //var appVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-
             InitializeApplicationConfiguration();
 
             Log.Logger = ConfigureLog.Configure();
-            Log.Information($"File Configuration Loaded for {ApplicationUtility.GetApplicationName()} ");
-
-            //var serviceProvider = ServicesConfigure();
-            //serviceProvider.GetService<Converter>().Convert.Process();
-
-
-            var honeycombOptions = new HoneycombOptions
-            {
-                ServiceName = ApplicationUtility.GetApplicationName(),
-                ServiceVersion = ApplicationUtility.GetApplicationVersion().ToString(),
-                ApiKey = _configuration["HoneyComb:apikey"],
-
-            };
+            Log.Information($"Configuration Loaded for {ApplicationUtility.GetApplicationName()}");
 
             // configure OpenTelemetry SDK to send metric data to Honeycomb
-      
+            InitializeTelementry(honeycombOptions);
 
-            //configure OT SDK to send traces to Honeycomb
-            using var tracerProvider = Sdk.CreateTracerProviderBuilder()
-            .AddHoneycomb(honeycombOptions)
-            .AddConsoleExporter() // for debugging
-            .Build();
-            //.AddAutoInstrumentations()  //get redis cache error
-            //System.InvalidOperationException: 'StackExchange.Redis IConnectionMultiplexer could not be resolved through application IServiceProvider'
+            var spanConvert = ApplicationTracer.StartSpan("Prorgram Started", SpanKind.Client, startTime: DateTimeOffset.UtcNow);
+            try
+            {
+                _converter = new Converter(OnenoteApp, ApplicationTracer, ApplicationMeter)
+                {
+                    RemoveIntermediateConvertedFiles = Convert.ToBoolean(_configuration["removeIntermediateWordFiles"]),
+                    ExportPath = _configuration["exportedFilePath"],
+                    FilteredNoteBookName = _configuration["NoteBookName"],
+                    FilteredSectionName = _configuration["SectionName"],
+                    PandocPath = _configuration["pandocpath"],
+                    ParallelThreadCount = Convert.ToInt32(_configuration["appParallelismCount"]),
+                    BypassConvertion = Convert.ToBoolean(_configuration["debugBypassHeavyWorkload"])
+                };
 
-            // get an instance of a tracer that can be used to create spans
-            var tracer = tracerProvider.GetTracer(honeycombOptions.ServiceName);
 
-            
+                _converter.ConvertPages();
+
+            }
+            catch (Exception ex)
+            {
+                spanConvert.SetStatus(Status.Error.WithDescription(ex.ToString()));
+                throw;
+            }
+            finally
+            {
+                spanConvert.SetStatus(Status.Ok.WithDescription("Completed All Conversions"));
+                spanConvert.End(endTimestamp: DateTimeOffset.UtcNow);
+            }
+
+            //If using DI
             // Register Tracer so it can be injected into other components (eg Controllers)
             //builder.Services.AddSingleton(TracerProvider.Default.GetTracer(honeycombOptions.ServiceName));
 
-            // create span to describe some application logic
-            using var span = tracer.StartActiveSpan("doSomething");
-            span.SetAttribute("app.manual-span.message", "Adding custom spans is also super easy!");
-            span.SetAttribute("user_id", 123);
-            span.End(new DateTimeOffset());
+            // Example create span to describe some application logic
+            //using var span = _ApplicationTracer.StartActiveSpan("doSomething");
+            //span.SetAttribute("app.manual-span.message", "Adding custom spans is also super easy!");
+            //span.SetAttribute("user_id", 123);
+            //span.End(new DateTimeOffset()); 
 
-          
-            _converter = new Converter(OnenoteApp,_configuration, tracer, honeycombOptions);
-            _converter.Convert(Convert.ToBoolean(_configuration["removeIntermediateWordFiles"]));
-
-            
             Log.CloseAndFlush();
+
+            MeterProvider.Dispose();
+            TraceProvider.Dispose();
+            ApplicationMeter.Dispose();
+            
+
+
 
         }
 
+        private static void InitializeTelementry(HoneycombOptions honeycombOptions)
+        {
+            //configure OpenTel send traces to Honeycomb
+            var traceProviderBuilder = Sdk.CreateTracerProviderBuilder()
+            .AddHoneycomb(honeycombOptions)
+            .AddConsoleExporter(); // for debugging
+            //.AddAutoInstrumentations();  //get redis cache error - probably only used in asp.net core apps
+            //System.InvalidOperationException: 'StackExchange.Redis IConnectionMultiplexer could not be resolved through application IServiceProvider'
 
+            TraceProvider = traceProviderBuilder.Build();
+            
+            // get an instance of a tracer that can be used to create spans
+            ApplicationTracer = TraceProvider.GetTracer(honeycombOptions.ServiceName);
+            
+            //create the meter (why doesnt this follow the same pattern as tracerprovider?)
+            ApplicationMeter = new Meter(honeycombOptions.ServiceName, honeycombOptions.ServiceVersion);
 
+            //add meter to provider
+            var meterProviderBuilder = Sdk.CreateMeterProviderBuilder()
+              .AddHoneycomb(honeycombOptions)
+              .AddMeter(honeycombOptions.ServiceName)
+              .AddConsoleExporter();
+
+            MeterProvider = meterProviderBuilder.Build();
+        }
 
         private static void InitializeApplicationConfiguration()
         {
@@ -94,21 +120,28 @@ namespace OneNoteExporter
                 .AddEnvironmentVariables()
                 .AddUserSecrets<Program>();
 
-
             _configuration = builder.Build();
+
+            honeycombOptions = new HoneycombOptions
+            {
+                ServiceName = ApplicationUtility.GetApplicationName(),
+                ServiceVersion = ApplicationUtility.GetApplicationVersion().ToString(),
+                ApiKey = _configuration["Honeycomb:ApiKey"],
+
+            };
         }
 
-
-        public static ServiceProvider ServicesConfigure()
-        {
-            return new ServiceCollection()
-                .AddLogging(l => l.AddConsole())
-                .Configure<LoggerFilterOptions>(c => c.MinLevel = LogLevel.Trace)
-                //.AddSingleton<IPrintSettingsProvider, PrintSettingsProvider>()
-                //.AddSingleton<IConsolePrinter, ConsolePrinter>()
-                .AddSingleton<Converter>()
-                .BuildServiceProvider();
-        }
+        //If using DI
+        //public static ServiceProvider ServicesConfigure()
+        //{
+        //    return new ServiceCollection()
+        //        .AddLogging(l => l.AddConsole())
+        //        .Configure<LoggerFilterOptions>(c => c.MinLevel = LogLevel.Trace)
+        //        //.AddSingleton<IPrintSettingsProvider, PrintSettingsProvider>()
+        //        //.AddSingleton<IConsolePrinter, ConsolePrinter>()
+        //        .AddSingleton<Converter>()
+        //        .BuildServiceProvider();
+        //}
 
 
     }
