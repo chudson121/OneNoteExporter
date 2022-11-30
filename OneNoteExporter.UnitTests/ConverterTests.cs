@@ -37,11 +37,14 @@ namespace OneNoteExporter.Tests
             
             //mock tracer
             var _telemetryTracer = new Mock<Tracer>();
+            var _tracerProvider = Sdk.CreateTracerProviderBuilder().Build();
+            //_tracerProvider.
+
             //_telemetryTracer.SetupGet(x => x)
             //var ts = new 
             //Tracer tracer = OpenTelemetry.getTracer("instrumentation-library-name", "1.0.0");
             //mock meter
-            
+
             //create the meter
             var _ApplicationMeter = new Meter("instrumentation-library-name", "1.0.0");
 
@@ -52,14 +55,14 @@ namespace OneNoteExporter.Tests
               .Build();
 
 
-
+            
             var _meter = new Mock<System.Diagnostics.Metrics.Meter>();
 
-            var c = new Converter(mockApp.Object, _configurationRoot.Object, _telemetryTracer.Object,_meter.Object);
+            var c = new Converter(mockApp.Object,  _telemetryTracer.Object, _meter.Object);
            
             //act
 
-            var result = c.ConvertPage(true);
+            var result = c.ConvertPages();
 
             //assert
             Assert.IsTrue(result > 0);
