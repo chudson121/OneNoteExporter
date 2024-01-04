@@ -24,7 +24,7 @@ namespace OneNoteExporter
 
         //Configuration
         private readonly AppSettings _appSettings;
-        //private IConfigurationRoot configuration;
+        
         public string ExportPath { get; set; }
 
         public string PandocPath { get; set; }
@@ -55,8 +55,8 @@ namespace OneNoteExporter
         public ConverterService(AppSettings _settings, Application app, Tracer tracer, Meter meter)
         {
             _appSettings = _settings;
-            RemoveIntermediateConvertedFiles = _appSettings.DeleteOneNoteDocxFiles;
-            ExportPath = _appSettings.ExportedFilePath;
+            
+            //ExportPath = _appSettings.ExportedFilePath;
             FilteredNoteBookName = _appSettings.NoteBookName;
             FilteredSectionName = _appSettings.SectionName;
             PandocPath = _appSettings.PanDocPath;
@@ -84,7 +84,7 @@ namespace OneNoteExporter
         public List<PageInfo> GetPagesToProcess()
         {
 
-            PagesToProcess = OneNoteExtensions.GetPageInfoForSections(app, FilteredSections);
+            PagesToProcess = OneNoteExtensions.GetPageInfoForSections(OnenoteApp, FilteredSections);
             FilesProcessedCount += PagesToProcess.Count;
 
             return PagesToProcess;
@@ -92,7 +92,6 @@ namespace OneNoteExporter
         }
 
 
-        //this is doing lots of stuff, is it all its own concern
         public long ConvertPages(List<PageInfo> Pages)
         {
             using var span = Tracer.StartActiveSpan("FilteredNotebooks");
@@ -123,9 +122,7 @@ namespace OneNoteExporter
 
 
         }
-
-        //TODO: this should be in the OneNoteClass
-
+               
 
         private void OrchestratePageExtraction(PageInfo pageInfo)
         {

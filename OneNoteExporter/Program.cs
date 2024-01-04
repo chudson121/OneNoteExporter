@@ -34,7 +34,7 @@ namespace OneNoteExporter
         private static AppSettings appSettings;
         private static bool FlagSkipProcessing = false;
 
-        public static void Main(AppSettings appSettings)
+        public static void Main()
         {
             InitializeApplicationConfiguration();
 
