@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.Office.Interop.OneNote;
 using OneNoteExporter.OneNoteModels;
+using OpenTelemetry.Trace;
 using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
 
 namespace OneNoteExporter
@@ -22,7 +22,6 @@ namespace OneNoteExporter
             var asciiChars = value.Where(ch => Encoding.UTF8.GetByteCount(new[] { ch }) == 1).ToArray();
             return new string(asciiChars);
         }
-
 
         public static string GetObjectId(this Application oneNoteApp, string parentId, HierarchyScope scope, string objectName)
         {
@@ -149,8 +148,6 @@ namespace OneNoteExporter
             return sections.ToArray();
         }
 
-
-
         public static List<PageInfo> GetPages(this Application oneNoteApp, SectionBase section)
         {
             var retval = new List<PageInfo>();
@@ -196,6 +193,78 @@ namespace OneNoteExporter
 
             return retval;
         }
+
+        public static List<OneNoteModels.NotebookInfo> GetNotebookInfos(OneNoteModels.NotebookInfo[] notebookCollecction, string filterContentName)
+        {
+            var returnedList = new List<OneNoteModels.NotebookInfo>();
+
+            if (string.IsNullOrEmpty(filterContentName)) //process all
+            {
+                return returnedList;
+            }
+
+            foreach (var nb in from nb in notebookCollecction
+                               where string.Equals(nb.Title, filterContentName, StringComparison.CurrentCultureIgnoreCase)
+                               select nb)
+            {
+                returnedList.Add(nb);
+                break;
+            }
+
+            return returnedList;
+        }
+
+        public static List<OneNoteModels.SectionBase> GetFilteredSections(List<OneNoteModels.NotebookInfo> notebookCollecction, string sectionName)
+        {
+            var returnedSections = new List<OneNoteModels.SectionBase>();
+
+            foreach (var nb in notebookCollecction)
+            {
+
+                //empty filter add all sections from notebook
+                if (string.IsNullOrEmpty(sectionName)) //process all sections
+                {
+                    return returnedSections = new List<OneNoteModels.SectionBase>(nb.Sections);
+                }
+
+                //Filter
+                var sectionBaseMatchingFilter = nb.Sections.FirstOrDefault(
+                        name => name.Title.ToLowerInvariant() == sectionName.ToLowerInvariant());
+
+                returnedSections.Add(sectionBaseMatchingFilter);
+
+            }
+
+            return returnedSections;
+
+        }
+
+        public static List<PageInfo> GetPageInfoForSections(this Application oneNoteApp, List<OneNoteModels.SectionBase> FilteredSections)
+        {
+
+            var pageInfoList = new List<PageInfo>();
+
+            //using var span = Tracer.StartActiveSpan("Getting pages");
+
+
+            foreach (var section in FilteredSections)
+            {
+                //span.SetAttribute("app.PageInfo.message", $"Getting pages for Section: {section.Title}");
+                //Log.Information($"Getting pages for Section: {section.Title}");
+                //SectionCounter.Add(1);
+                pageInfoList.AddRange(oneNoteApp.GetPages(section));
+
+                //FilesProcessedCount += pageInfoList.Count;
+
+            }
+
+            //span.End(new DateTimeOffset());
+
+            return pageInfoList;
+
+
+        }
+
 
     }
 }

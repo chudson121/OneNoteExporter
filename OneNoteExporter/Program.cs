@@ -11,21 +11,30 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Serilog;
 
+using io.harness.cfsdk.client.dto;
+using io.harness.cfsdk.client.api;
+using io.harness.cfsdk.client.connector;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
 namespace OneNoteExporter
 {
     public class Program
     {
         private static IConfigurationRoot _configuration;
         private static readonly Application OnenoteApp = new();
-        private static Converter _converter;
+        private static ConverterService _converter;
 
-        private static HoneycombOptions honeycombOptions;
+        private static readonly ActivitySource ActivitySource = new ActivitySource(ApplicationUtility.GetApplicationName());
         private static TracerProvider TraceProvider;
         private static MeterProvider MeterProvider;
         private static Tracer ApplicationTracer;
         private static Meter ApplicationMeter;
+        private static HoneycombOptions honeycombOptions;
+        private static AppSettings appSettings;
+        private static bool FlagSkipProcessing = false;
 
-        public static void Main()
+        public static void Main(AppSettings appSettings)
         {
             InitializeApplicationConfiguration();
 
@@ -35,33 +44,32 @@ namespace OneNoteExporter
             // configure OpenTelemetry SDK to send metric data to Honeycomb
             InitializeTelementry(honeycombOptions);
 
-            var spanConvert = ApplicationTracer.StartSpan("Prorgram Started", SpanKind.Client, startTime: DateTimeOffset.UtcNow);
-            try
+            using (var activity = ActivitySource.StartActivity($"{ApplicationUtility.GetApplicationName()}.Start"))
             {
-                _converter = new Converter(OnenoteApp, ApplicationTracer, ApplicationMeter)
+                activity?.SetTag("foo", "value"); //test tag
+                var spanConvert = ApplicationTracer.StartSpan("Prorgram Started", SpanKind.Client, startTime: DateTimeOffset.UtcNow);
+                try
                 {
-                    RemoveIntermediateConvertedFiles = Convert.ToBoolean(_configuration["removeIntermediateWordFiles"]),
-                    ExportPath = _configuration["exportedFilePath"],
-                    FilteredNoteBookName = _configuration["NoteBookName"],
-                    FilteredSectionName = _configuration["SectionName"],
-                    PandocPath = _configuration["pandocpath"],
-                    ParallelThreadCount = Convert.ToInt32(_configuration["appParallelismCount"]),
-                    BypassConvertion = Convert.ToBoolean(_configuration["debugBypassHeavyWorkload"])
-                };
+                    _converter = new ConverterService(appSettings, OnenoteApp, ApplicationTracer, ApplicationMeter);
+                    var pages = _converter.GetPagesToProcess();
+                    _converter.ConvertPages(pages);
 
 
-                _converter.ConvertPages();
+                    if (Convert.ToBoolean(_configuration["DeleteOneNoteDocxFiles"]))
+                        FileSystemHelper.RemoveFiles(_converter.FilesToBeDeleted);
 
-            }
-            catch (Exception ex)
-            {
-                spanConvert.SetStatus(Status.Error.WithDescription(ex.ToString()));
-                throw;
-            }
-            finally
-            {
-                spanConvert.SetStatus(Status.Ok.WithDescription("Completed All Conversions"));
-                spanConvert.End(endTimestamp: DateTimeOffset.UtcNow);
+                }
+                catch (Exception ex)
+                {
+                    spanConvert.SetStatus(Status.Error.WithDescription(ex.ToString()));
+                    throw;
+                }
+                finally
+                {
+                    spanConvert.SetStatus(Status.Ok.WithDescription("Completed All Conversions"));
+                    spanConvert.End(endTimestamp: DateTimeOffset.UtcNow);
+                }
+
             }
 
             //If using DI
@@ -89,7 +97,8 @@ namespace OneNoteExporter
         {
             //configure OpenTel send traces to Honeycomb
             var traceProviderBuilder = Sdk.CreateTracerProviderBuilder()
-            .AddHoneycomb(honeycombOptions)
+            .AddSource(ApplicationUtility.GetApplicationName())
+            .AddHoneycomb(honeycombOptions)//Vendor specific
             .AddConsoleExporter(); // for debugging
             //.AddAutoInstrumentations();  //get redis cache error - probably only used in asp.net core apps
             //System.InvalidOperationException: 'StackExchange.Redis IConnectionMultiplexer could not be resolved through application IServiceProvider'
@@ -118,7 +127,8 @@ namespace OneNoteExporter
                 .AddJsonFile("appsettings.json", true, true)
                 .AddJsonFile("loggerconfig.json", false, true) //mantained separate config file
                 .AddEnvironmentVariables()
-                .AddUserSecrets<Program>();
+                .AddUserSecrets<Program>()
+                ;
 
             _configuration = builder.Build();
 
@@ -129,6 +139,34 @@ namespace OneNoteExporter
                 ApiKey = _configuration["Honeycomb:ApiKey"],
 
             };
+
+            appSettings = AppSettings.LoadAppSettings();
+            //ConfigureFeatureFlag().Wait(); TODO: Harness call has issue if now api key is in filestore
+
+        }
+
+        private static async Task ConfigureFeatureFlag()
+        {
+            FileMapStore fileStore = new FileMapStore("Non-Freemium");
+            LocalConnector connector = new LocalConnector("local");
+            //var featureToggleClient = new CfClient(connector, Config.builder().store(fileStore).build());
+            var harnessConfig = new Config();
+            harnessConfig = Config.Builder()
+                .SetPollingInterval(60000)
+                .SetAnalyticsEnabled()
+                .SetStreamEnabled(true)
+                .SetStore(fileStore)
+                .Build();
+
+            await CfClient.Instance.Initialize(_configuration["Harness:FeatureFlagKey"], harnessConfig);
+
+
+            Target target = Target.builder()
+                .Name(_configuration["Harness:UserName"]) //can change with your target name
+                .Identifier(_configuration["Harness:Identifier"]) //can change with your target identifier
+                .build();
+
+            FlagSkipProcessing = CfClient.Instance.boolVariation("skipprocessing", target, false);
         }
 
         //If using DI

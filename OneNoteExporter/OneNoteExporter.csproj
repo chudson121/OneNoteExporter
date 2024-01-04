@@ -11,7 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Honeycomb.OpenTelemetry" Version="1.2.0" />
+    <PackageReference Include="ff-dotnet-server-sdk" Version="1.1.6" />
+    <PackageReference Include="Honeycomb.OpenTelemetry" Version="1.2.1" />
     <PackageReference Include="Honeycomb.OpenTelemetry.AutoInstrumentations" Version="0.25.0-beta" />
     <PackageReference Include="Interop.Microsoft.Office.Interop.OneNote" Version="1.1.0.2" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0" />
@@ -19,7 +20,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="7.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="7.0.0" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="2.2.0" />
     <PackageReference Include="Serilog.Enrichers.Thread" Version="3.1.0" />
     <PackageReference Include="Serilog.Settings.AppSettings" Version="2.2.2" />
