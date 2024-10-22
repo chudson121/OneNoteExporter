@@ -18,7 +18,7 @@ namespace OneNoteExporter.AppConfig
         /// <summary>
         /// Thread count for parallel processing
         /// </summary>
-        public int AppParallelismCount { get; set; } = 20;
+        public int AppParallelismCount { get; set; } = 10;
 
         public string PanDocPath { get; set; }
 

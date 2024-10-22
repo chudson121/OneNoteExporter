@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -21,12 +22,47 @@ namespace OneNoteExporter
 
         public static string GetSafeFilename(this string str)
         {
-            var retval = string.Join("_", str.Split(Path.GetInvalidFileNameChars()));
-               // .Replace(" ", "_");
+            int maxLength = 75;
+            var retval = ReplaceInvalidFileNameCharsWithUnderscore(str);
+
+            // Trim to the maximum length
+            retval = retval.Substring(0, Math.Min(retval.Length, maxLength));
+
+            // Remove any leading or trailing underscores
+            retval = retval.Trim('_');
 
             return retval;
-
         }
+
+        private static string ReplaceInvalidFileNameCharsWithUnderscore(string fileName)
+        {
+            // Replace invalid characters with underscore
+            var invalidChars = new HashSet<char>(Path.GetInvalidFileNameChars());
+            var builder = new StringBuilder();
+
+            bool previousWasUnderscore = false;
+            foreach (char c in fileName)
+            {
+                if (invalidChars.Contains(c))
+                {
+                    if (!previousWasUnderscore)
+                    {
+                        builder.Append('_');
+                        previousWasUnderscore = true;
+                    }
+                }
+                else
+                {
+                    builder.Append(c);
+                    previousWasUnderscore = false;
+                }
+            }
+
+            return builder.ToString();
+        }
+
+
+
         public static string RemoveOneNoteHeader(string pageTxt)
         {
             var pageTxtModified = Regex.Replace(pageTxt, @"^.+(\n|\r|\r\n){1,2}.+(\n|\r|\r\n){1,2}\d{2}:\d{2}\s+", "");
