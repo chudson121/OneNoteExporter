@@ -11,9 +11,9 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Serilog;
 
-using io.harness.cfsdk.client.dto;
-using io.harness.cfsdk.client.api;
-using io.harness.cfsdk.client.connector;
+//using io.harness.cfsdk.client.dto;
+//using io.harness.cfsdk.client.api;
+//using io.harness.cfsdk.client.connector;
 using System.Threading.Tasks;
 using System.Diagnostics;
 
@@ -30,9 +30,16 @@ namespace OneNoteExporter
         private static MeterProvider MeterProvider;
         private static Tracer ApplicationTracer;
         private static Meter ApplicationMeter;
+
         private static HoneycombOptions honeycombOptions;
         private static AppSettings appSettings;
-        private static bool FlagSkipProcessing = false;
+        
+        //TODO:
+        // I want to take a list of Markdown files (since last run date for example)
+        //GetMarkDownFilesFromDirectory(path, fromDate)
+        //importFilesIntoOneNote(files)
+        // import into one note in a specific notebook/section
+
 
         public static void Main()
         {
@@ -42,34 +49,48 @@ namespace OneNoteExporter
             Log.Information($"Configuration Loaded for {ApplicationUtility.GetApplicationName()}");
 
             // configure OpenTelemetry SDK to send metric data to Honeycomb
-            InitializeTelementry(honeycombOptions);
+            InitializeTelemetry(honeycombOptions);
+            ExportFromOneNoteToMDFiles();
 
-            using (var activity = ActivitySource.StartActivity($"{ApplicationUtility.GetApplicationName()}.Start"))
+            Log.CloseAndFlush();
+
+            MeterProvider.Dispose();
+            TraceProvider.Dispose();
+            ApplicationMeter.Dispose();
+
+
+
+
+        }
+
+        private static void ExportFromOneNoteToMDFiles()
+        {
+            using var activity = ActivitySource.StartActivity($"{ApplicationUtility.GetApplicationName()}.Start");
+            activity?.SetTag("ExportFiles", appSettings.NoteBookName);
+            var spanConvert = ApplicationTracer.StartSpan("Program Started", SpanKind.Client, startTime: DateTimeOffset.UtcNow);
+            try
             {
-                activity?.SetTag("foo", "value"); //test tag
-                var spanConvert = ApplicationTracer.StartSpan("Prorgram Started", SpanKind.Client, startTime: DateTimeOffset.UtcNow);
-                try
-                {
-                    _converter = new ConverterService(appSettings, OnenoteApp, ApplicationTracer, ApplicationMeter);
-                    var pages = _converter.GetPagesToProcess();
-                    _converter.ConvertPages(pages);
+                _converter = new ConverterService(appSettings, OnenoteApp, ApplicationTracer, ApplicationMeter);
+                var pages = _converter.GetPagesToProcess();
+                _converter.ConvertPages(pages);
 
 
-                    if (Convert.ToBoolean(_configuration["DeleteOneNoteDocxFiles"]))
-                        FileSystemHelper.RemoveFiles(_converter.FilesToBeDeleted);
+                
 
-                }
-                catch (Exception ex)
-                {
-                    spanConvert.SetStatus(Status.Error.WithDescription(ex.ToString()));
-                    throw;
-                }
-                finally
-                {
-                    spanConvert.SetStatus(Status.Ok.WithDescription("Completed All Conversions"));
-                    spanConvert.End(endTimestamp: DateTimeOffset.UtcNow);
-                }
 
+                if (Convert.ToBoolean(_configuration["DeleteOneNoteDocxFiles"]))
+                    FileSystemHelper.RemoveFiles(_converter.FilesToBeDeleted);
+
+            }
+            catch (Exception ex)
+            {
+                spanConvert.SetStatus(Status.Error.WithDescription(ex.ToString()));
+                throw;
+            }
+            finally
+            {
+                spanConvert.SetStatus(Status.Ok.WithDescription("Completed All Conversions"));
+                spanConvert.End(endTimestamp: DateTimeOffset.UtcNow);
             }
 
             //If using DI
@@ -81,19 +102,9 @@ namespace OneNoteExporter
             //span.SetAttribute("app.manual-span.message", "Adding custom spans is also super easy!");
             //span.SetAttribute("user_id", 123);
             //span.End(new DateTimeOffset()); 
-
-            Log.CloseAndFlush();
-
-            MeterProvider.Dispose();
-            TraceProvider.Dispose();
-            ApplicationMeter.Dispose();
-            
-
-
-
         }
 
-        private static void InitializeTelementry(HoneycombOptions honeycombOptions)
+        private static void InitializeTelemetry(HoneycombOptions honeycombOptions)
         {
             //configure OpenTel send traces to Honeycomb
             var traceProviderBuilder = Sdk.CreateTracerProviderBuilder()
@@ -145,29 +156,29 @@ namespace OneNoteExporter
 
         }
 
-        private static async Task ConfigureFeatureFlag()
-        {
-            FileMapStore fileStore = new FileMapStore("Non-Freemium");
-            LocalConnector connector = new LocalConnector("local");
-            //var featureToggleClient = new CfClient(connector, Config.builder().store(fileStore).build());
-            var harnessConfig = new Config();
-            harnessConfig = Config.Builder()
-                .SetPollingInterval(60000)
-                .SetAnalyticsEnabled()
-                .SetStreamEnabled(true)
-                .SetStore(fileStore)
-                .Build();
+        //private static async Task ConfigureFeatureFlag()
+        //{
+        //    FileMapStore fileStore = new FileMapStore("Non-Freemium");
+        //    LocalConnector connector = new LocalConnector("local");
+        //    //var featureToggleClient = new CfClient(connector, Config.builder().store(fileStore).build());
+        //    var harnessConfig = new Config();
+        //    harnessConfig = Config.Builder()
+        //        .SetPollingInterval(60000)
+        //        .SetAnalyticsEnabled()
+        //        .SetStreamEnabled(true)
+        //        .SetStore(fileStore)
+        //        .Build();
 
-            await CfClient.Instance.Initialize(_configuration["Harness:FeatureFlagKey"], harnessConfig);
+        //    await CfClient.Instance.Initialize(_configuration["Harness:FeatureFlagKey"], harnessConfig);
 
 
-            Target target = Target.builder()
-                .Name(_configuration["Harness:UserName"]) //can change with your target name
-                .Identifier(_configuration["Harness:Identifier"]) //can change with your target identifier
-                .build();
+        //    Target target = Target.builder()
+        //        .Name(_configuration["Harness:UserName"]) //can change with your target name
+        //        .Identifier(_configuration["Harness:Identifier"]) //can change with your target identifier
+        //        .build();
 
-            FlagSkipProcessing = CfClient.Instance.boolVariation("skipprocessing", target, false);
-        }
+        //    FlagSkipProcessing = CfClient.Instance.boolVariation("skipprocessing", target, false);
+        //}
 
         //If using DI
         //public static ServiceProvider ServicesConfigure()

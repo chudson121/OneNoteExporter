@@ -11,7 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Office.Interop.OneNote;
 using OneNoteExporter.AppConfig;
 using OpenTelemetry.Trace;
-using Serilog;
+using Serilog;  //this should be injected into the service
 
 using PageInfo = OneNoteExporter.OneNoteModels.PageInfo;
 
@@ -29,7 +29,7 @@ namespace OneNoteExporter
 
         public string PandocPath { get; set; }
 
-        public int ParallelThreadCount { get; set; } = 10;
+        public int ParallelThreadCount { get; set; } = 20;
 
         public string FilteredNoteBookName { get; set; }
 
@@ -50,13 +50,14 @@ namespace OneNoteExporter
         private List<OneNoteModels.NotebookInfo> FilteredNotebooks { get; }
         private List<OneNoteModels.SectionBase> FilteredSections { get; }
         private List<PageInfo> PagesToProcess { get; set; }
+        public List<PageInfo> PagesError { get; private set; } = new List<PageInfo>();
 
 
         public ConverterService(AppSettings _settings, Application app, Tracer tracer, Meter meter)
         {
             _appSettings = _settings;
             
-            //ExportPath = _appSettings.ExportedFilePath;
+            ExportPath = _appSettings.ExportedFilePath;
             FilteredNoteBookName = _appSettings.NoteBookName;
             FilteredSectionName = _appSettings.SectionName;
             PandocPath = _appSettings.PanDocPath;
@@ -77,8 +78,6 @@ namespace OneNoteExporter
             SectionCounter.Add(FilteredSections.Count);
 
             
-
-
         }
 
         public List<PageInfo> GetPagesToProcess()
@@ -112,10 +111,22 @@ namespace OneNoteExporter
                 MaxDegreeOfParallelism = ParallelThreadCount
             };
 
-            Parallel.ForEach(Pages, options, OrchestratePageExtraction);
+            //Parallel.ForEach(Pages, options, OrchestratePageExtraction);
+            foreach(var page in Pages)
+            {
+                OrchestratePageExtraction(page);
+            }
 
             span.SetStatus(Status.Ok.WithDescription("Completed page Conversions"));
             span.End(endTimestamp: DateTimeOffset.UtcNow);
+
+            foreach (PageInfo page in PagesError)
+            {
+                Log.Information($"Error processing: {page.Title}");
+
+            }
+
+
 
 
             return FilesProcessedCount;
@@ -192,6 +203,7 @@ namespace OneNoteExporter
             }
             catch (Exception e)
             {
+                PagesError.Add(pageInfo);
                 Log.Error(filePath);
                 Log.Error(e.Message);
                 //continue on processing files
